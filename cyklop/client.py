@@ -2,28 +2,7 @@ import asyncio
 
 import httpx
 
-STATUS_SUCCESS = 'OK'
-STATUS_FAILURE = 'FAILED'
-STATUS_ERROR = 'ERROR'
-
-
-class _Result:
-    __slots__ = [
-        'start',
-        'end',
-        'status',
-        'error'
-    ]
-
-    def __repr__(self):
-        return f'<{self.__class__.__name__}({self.status})>'
-
-    def __init__(self, start: float, end: float = None,
-                 status: str = None, error: str = None):
-        self.start = start
-        self.end = end
-        self.status = status
-        self.error = error
+from .collector import Result
 
 
 class HttpRequest:
@@ -65,7 +44,7 @@ class HttpResponse:
         'encoding'
     ]
 
-    def __init__(self, request: HttpRequest, result: _Result,
+    def __init__(self, request: HttpRequest, result: Result,
                  status: int = -1, headers: dict = None,
                  data: bytes = None, encoding: str = 'utf-8'):
         self._request = request
@@ -84,17 +63,13 @@ class HttpResponse:
             return ''
         return self.data.decode(self.encoding)
 
-    def fail(self):
-        if self.result.status == STATUS_SUCCESS:
-            self.result.status = STATUS_FAILURE
-
     def verify_status(self, *statuses):
         if self.status not in statuses:
-            self.fail()
+            self.result.set_failure()
 
     def verify_header(self, header, value):
         if self.headers.get(header) != value:
-            self.fail()
+            self.result.set_failure()
 
 
 class HttpClient:
@@ -106,9 +81,10 @@ class HttpClient:
 
     _client = None
 
-    def __init__(self, loop=None):
+    def __init__(self, user, loop=None):
         self.headers = {}
         self.cookies = {}
+        self._user = user
         self._loop = loop or asyncio.get_running_loop()
 
     def _build_url(self, path: str):
@@ -124,26 +100,26 @@ class HttpClient:
                                              cert=self.ssl_cert)
         return self._client
 
-    def get(self, url: str, **kwargs):
+    def get(self, url: str, **kwargs) -> HttpRequest:
         return HttpRequest(self, 'GET', url, **kwargs)
 
-    async def request(self, request: HttpRequest):
+    async def request(self, request: HttpRequest) -> HttpResponse:
         client = self._get_client()
-        result = _Result(self._loop.time())
+        result = Result(request.url, str(self._user),
+                        start=self._loop.time())
         try:
             response = await client.request(request.method, request.url,
                                             params=request.params,
                                             headers=request.headers,
                                             cookies=request.cookies)
         except Exception as err:
-            result.status = STATUS_ERROR
-            result.error = str(err)
+            result.set_error(err)
             return HttpResponse(request, result)
         else:
-            result.status = STATUS_SUCCESS
             return HttpResponse(request, result,
                                 response.status_code,
                                 headers={**response.headers},
                                 data=response.content, encoding=response.encoding)
         finally:
             result.end = self._loop.time()
+            self._user.collect(result)
