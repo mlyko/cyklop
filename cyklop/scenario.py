@@ -1,17 +1,41 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Type
 
 from .user import User
 
 
-@dataclass
 class LoadStep:
-    __slots__ = ['number', 'duration', 'user']
+    _start_time: float = None
+    _end_time: float = None
 
-    number: int
-    duration: float
-    user: Type[User]
+    _base_rate: int = 0
+    _rate_acc: float = 0.0
+
+    def __init__(self, rate: int, duration: int, user: Type[User]):
+        self.rate = rate if rate >= 1 else 0
+        self.duration = duration if duration >= 1 else 0
+        self.user = user
+
+    def start(self, current_time: float, current_rate: int = 0):
+        self._start_time = current_time
+        self._end_time = current_time + self.duration
+        self._base_rate = current_rate
+
+        if self.rate and self.duration:
+            self._rate_acc = (self.rate - self._base_rate) / self.duration
+
+    def done(self, current_time: float) -> bool:
+        return self._end_time <= current_time
+
+    def get_rate(self, current_time: float) -> int:
+        if not self.duration:
+            return self.rate
+
+        if not self.rate:
+            return self._base_rate
+
+        rate = self._base_rate + int(self._rate_acc * (current_time - self._start_time))
+        return min(rate, self.rate)
 
 
 class Scenario(ABC):
@@ -20,15 +44,19 @@ class Scenario(ABC):
     def __init__(self):
         self._steps = []
 
-    def ramp_up(self, number: int, duration: float, user: Type[User] = None):
-        self._steps.append(LoadStep(number, duration,
+    def __iter__(self):
+        for step in self._steps:
+            yield step
+
+    def ramp_up(self, rate: int, duration: int, user: Type[User] = None):
+        self._steps.append(LoadStep(rate, duration,
                                     user or self.default_user))
 
     def jump_to(self, number: int, user: Type[User] = None):
-        self._steps.append(LoadStep(number, 0.0,
+        self._steps.append(LoadStep(number, 0,
                                     user or self.default_user))
 
-    def hold_for(self, duration: float, user: Type[User] = None):
+    def hold_for(self, duration: int, user: Type[User] = None):
         self._steps.append(LoadStep(0, duration,
                                     user or self.default_user))
 
