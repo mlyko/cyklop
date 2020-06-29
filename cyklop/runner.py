@@ -1,6 +1,7 @@
 import abc
 import asyncio
 import importlib.util
+from asyncio.events import AbstractEventLoop
 
 from .log import logger
 from .collector import Collector
@@ -8,10 +9,24 @@ from .scenario import User, Scenario
 
 
 class ScenarioRunner:
-    def __init__(self, scenario_file: str, collector: Collector = None):
-        self.collector = collector
+    # Number of spawning cycles per second
+    _spawn_cycles = 10
+    _spawn_interval = 1 / _spawn_cycles
+    _spawn_index = 0
 
-        self._loop = asyncio.get_event_loop()
+    _scenario_steps = None
+    _current_step = None
+    _current_rate = 0
+    _start_time: float = None
+
+    _pending_users = 0
+
+    _task = None
+
+    def __init__(self, scenario_file: str, loop: AbstractEventLoop = None):
+        self.collector = Collector()
+
+        self._loop = loop or asyncio.get_event_loop()
         self._scenario = self._load_scenario(scenario_file)
 
     @staticmethod
@@ -41,3 +56,70 @@ class ScenarioRunner:
 
         logger.info('Loaded scenario file: user=%r, scenario=%r', scenario_class.default_user, scenario_class)
         return scenario_class()
+
+    def _step_forward(self, current_time: float):
+        self._current_step = next(self._scenario_steps, None)
+        if self._current_step:
+            self._current_step.start(current_time, self._current_rate)
+
+    def _rate_forward(self):
+        timer = self._loop.call_later(1.0, self._rate_forward)
+
+        current_time = self._loop.time()
+        if self._current_step.done(current_time):
+            self._step_forward(current_time)
+
+        if self._current_step is None:
+            timer.cancel()
+            return
+
+        self._current_rate = self._current_step.get_rate(current_time)
+        logger.debug('Current users rate: %d', self._current_rate)
+        self._spawn_index = 0
+
+    def _spawn_users(self):
+        if self._current_step is None:
+            return
+
+        self._loop.call_later(self._spawn_interval, self._spawn_users)
+
+        n = self._current_rate // self._spawn_cycles
+        if self._spawn_index % self._spawn_cycles < self._current_rate % self._spawn_cycles:
+            n += 1
+
+        logger.debug('Spawn next users: %d', n)
+        for i in range(n):
+            user = self._current_step.user(self.collector, self._loop)
+            future = asyncio.ensure_future(user.execute(), loop=self._loop)
+            future.add_done_callback(self._user_done)
+            self._pending_users += 1
+
+        self._spawn_index += 1
+
+    def _user_done(self, future):
+        try:
+            future.result()
+        except Exception as err:
+            logger.error('User execution error: %s', err)
+
+        self._pending_users -= 1
+        self.collector.users += 1
+        if self._current_step is None and self._pending_users == 0:
+            self._task.set_result(True)
+
+    async def run(self):
+        self._task = asyncio.ensure_future(asyncio.Future(loop=self._loop), loop=self._loop)
+
+        self._scenario.simulate()
+        self._scenario_steps = iter(self._scenario)
+
+        self._start_time = self._loop.time()
+        logger.info('Start running scenario: %s', self._scenario)
+        self._step_forward(self._start_time)
+        self._rate_forward()
+        self._spawn_users()
+
+        try:
+            await self._task
+        finally:
+            logger.info('Stop running scenario: %s', self._scenario)

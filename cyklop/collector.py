@@ -39,6 +39,8 @@ class Result:
 
 
 class Collector:
+    users = 0
+
     def __init__(self):
         self._results = []
 

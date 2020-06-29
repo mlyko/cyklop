@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Type
 
+from .log import logger
 from .user import User
 
 
@@ -34,7 +35,7 @@ class LoadStep:
         if not self.rate:
             return self._base_rate
 
-        rate = self._base_rate + int(self._rate_acc * (current_time - self._start_time))
+        rate = self._base_rate + int(self._rate_acc * (current_time + 1.0 - self._start_time))
         return min(rate, self.rate)
 
 
@@ -49,16 +50,20 @@ class Scenario(ABC):
             yield step
 
     def ramp_up(self, rate: int, duration: int, user: Type[User] = None):
-        self._steps.append(LoadStep(rate, duration,
-                                    user or self.default_user))
+        user = user or self.default_user
+        logger.info('Simulate ramp up user rate: user=%r, rate=%d, duration=%ds',
+                    user, rate, duration)
+        self._steps.append(LoadStep(rate, duration, user))
 
-    def jump_to(self, number: int, user: Type[User] = None):
-        self._steps.append(LoadStep(number, 0,
-                                    user or self.default_user))
+    def jump_to(self, rate: int, user: Type[User] = None):
+        user = user or self.default_user
+        logger.info('Simulate jump user rate to: user=%r, rate=%d', user, rate)
+        self._steps.append(LoadStep(rate, 0, user))
 
     def hold_for(self, duration: int, user: Type[User] = None):
-        self._steps.append(LoadStep(0, duration,
-                                    user or self.default_user))
+        user = user or self.default_user
+        logger.info('Simulate hold user rate for: user=%r, duration=%ds', user, duration)
+        self._steps.append(LoadStep(0, duration, user))
 
     @abstractmethod
     def simulate(self):
