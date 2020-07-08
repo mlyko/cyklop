@@ -1,11 +1,15 @@
+import os
 import abc
 import asyncio
 import importlib.util
+from datetime import datetime
 from asyncio.events import AbstractEventLoop
 
 from .log import logger
 from .collector import Collector
 from .scenario import User, Scenario
+
+RESULTS_DIR = 'results'
 
 
 class ScenarioRunner:
@@ -23,11 +27,12 @@ class ScenarioRunner:
 
     _task = None
 
-    def __init__(self, scenario_file: str, loop: AbstractEventLoop = None):
-        self.collector = Collector()
-
+    def __init__(self, scenario_file: str, results_dir: str = RESULTS_DIR, loop: AbstractEventLoop = None):
         self._loop = loop or asyncio.get_event_loop()
         self._scenario = self._load_scenario(scenario_file)
+        self._result_dir = self._create_result_dir(results_dir, scenario_file)
+
+        self.collector = Collector(self._result_dir)
 
     @staticmethod
     def _load_scenario(scenario_file: str):
@@ -56,6 +61,16 @@ class ScenarioRunner:
 
         logger.info('Loaded scenario file: user=%r, scenario=%r', scenario_class.default_user, scenario_class)
         return scenario_class()
+
+    @staticmethod
+    def _create_result_dir(root_dir: str, scenario_file: str):
+        dt = datetime.now()
+        scenario_name = os.path.splitext(os.path.basename(scenario_file))
+        result_dir = os.path.abspath(os.path.join(root_dir,
+                                     f'{scenario_name}-{dt.strftime("%Y%m%d%H%M%S%f")}'))
+        logger.info('Create scenario result dir: %s', result_dir)
+        os.makedirs(result_dir, exist_ok=True)
+        return result_dir
 
     def _step_forward(self, current_time: float):
         self._current_step = next(self._scenario_steps, None)
@@ -119,7 +134,8 @@ class ScenarioRunner:
         self._rate_forward()
         self._spawn_users()
 
-        try:
-            await self._task
-        finally:
-            logger.info('Stop running scenario: %s', self._scenario)
+        with self.collector:
+            try:
+                await self._task
+            finally:
+                logger.info('Stop running scenario: %s', self._scenario)
