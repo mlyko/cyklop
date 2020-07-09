@@ -1,4 +1,5 @@
 import os
+import time
 
 STATUS_SUCCESS = 'OK'
 STATUS_FAILURE = 'FAILED'
@@ -46,36 +47,83 @@ class Result:
 
 
 class Collector:
-    users = 0
+    _start_time = None
+    _end_time = None
+
+    _reset_timer = None
+    _log_timer = None
 
     _results_file = None
 
     def __init__(self, result_dir: str, file_name: str):
         self._file_path = os.path.join(result_dir, file_name)
-        self._results = []
 
-    def __iter__(self):
-        return iter(self._results)
+        self.current_counters = self._create_counters()
+        self.previous_counters = self._create_counters()
+        self.total_counters = self._create_counters()
+
+        self.results = []
 
     def __enter__(self):
-        self.open()
+        self.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
+        self.stop()
+
+    @staticmethod
+    def _create_counters():
+        return {
+            'active_users': 0,
+            'users_done': 0,
+            'requests_sent': 0,
+            'requests_done': 0
+        }
+
+    def _reset_counters(self):
+        self.previous_counters = self.current_counters
+        self.current_counters = self._create_counters()
+        self.current_counters['active_users'] = self.total_counters['active_users']
 
     def _write_result(self, result: Result):
         if not self._results_file:
             return
         self._results_file.write(f'{result}\n')
 
-    def open(self):
-        self._results_file = open(self._file_path, 'w')
+    @property
+    def duration(self):
+        if not self._start_time:
+            return 0
+        if self._end_time:
+            return int(self._end_time - self._start_time)
 
-    def close(self):
+        return int(time.time() - self._start_time)
+
+    def start(self):
+        self._results_file = open(self._file_path, 'w')
+        self._start_time = time.time()
+
+    def stop(self):
+        self._end_time = time.time()
         if self._results_file:
             self._results_file.close()
 
-    def push(self, result: Result):
-        self._results.append(result)
+    def start_user(self):
+        self.current_counters['active_users'] += 1
+        self.total_counters['active_users'] += 1
+
+    def stop_user(self):
+        self.current_counters['active_users'] -= 1
+        self.total_counters['active_users'] -= 1
+        self.current_counters['users_done'] += 1
+        self.total_counters['users_done'] += 1
+
+    def start_request(self):
+        self.current_counters['requests_sent'] += 1
+        self.total_counters['requests_sent'] += 1
+
+    def stop_request(self, result: Result):
         self._write_result(result)
+        self.results.append(result)
+        self.current_counters['requests_done'] += 1
+        self.total_counters['requests_done'] += 1

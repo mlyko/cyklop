@@ -2,12 +2,13 @@ import asyncio
 
 import httpx
 
-from .collector import Result
+from .collector import Result, Collector
 
 
 class HttpRequest:
     __slots__ = [
         '_client',
+        'name',
         'method',
         'url',
         'params',
@@ -16,9 +17,10 @@ class HttpRequest:
         'timeout'
     ]
 
-    def __init__(self, client, method: str, url: str,
+    def __init__(self, client, method: str, url: str, name: str = None,
                  params=None, headers=None, cookies=None):
         self._client = client
+        self.name = name or f'[{method}]{url}'
         self.method = method
         self.url = url
         self.params = params or {}
@@ -28,7 +30,7 @@ class HttpRequest:
         self.timeout: float = 10.0
 
     def __repr__(self):
-        return f'<{self.__class__.__name__}({self.method} {self.url})>'
+        return f'<{self.__class__.__name__}({self.name})>'
 
     def __await__(self):
         return self._client.request(self).__await__()
@@ -81,11 +83,12 @@ class HttpClient:
 
     _client = None
 
-    def __init__(self, user, loop=None):
+    def __init__(self, user: 'User', collector: Collector, loop: asyncio.AbstractEventLoop):
         self.headers = {}
         self.cookies = {}
         self._user = user
-        self._loop = loop or asyncio.get_running_loop()
+        self._collector = collector
+        self._loop = loop
 
     def _build_url(self, path: str):
         return f'{self.base_url}{path}' if self.base_url else path
@@ -105,9 +108,10 @@ class HttpClient:
 
     async def request(self, request: HttpRequest) -> HttpResponse:
         client = self._get_client()
-        result = Result(request.url, str(self._user),
+        result = Result(request.name, str(self._user),
                         start=self._loop.time())
         try:
+            self._collector.start_request()
             response = await client.request(request.method, request.url,
                                             params=request.params,
                                             headers=request.headers,
@@ -122,4 +126,4 @@ class HttpClient:
                                 data=response.content, encoding=response.encoding)
         finally:
             result.end = self._loop.time()
-            self._user.collect(result)
+            self._collector.stop_request(result)

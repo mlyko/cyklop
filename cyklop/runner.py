@@ -105,6 +105,7 @@ class ScenarioRunner:
         logger.debug('Spawn next users: %d', n)
         for i in range(n):
             user = self._current_step.user(self.collector, self._loop)
+            self.collector.start_user()
             future = asyncio.ensure_future(user.execute(), loop=self._loop)
             future.add_done_callback(self._user_done)
             self._pending_users += 1
@@ -116,9 +117,10 @@ class ScenarioRunner:
             future.result()
         except Exception as err:
             logger.error('User execution error: %s', err)
+        finally:
+            self.collector.stop_user()
 
         self._pending_users -= 1
-        self.collector.users += 1
         if self._current_step is None and self._pending_users == 0:
             self._task.set_result(True)
 
