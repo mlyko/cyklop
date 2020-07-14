@@ -3,7 +3,6 @@ import abc
 import asyncio
 import importlib.util
 from datetime import datetime
-from asyncio.events import AbstractEventLoop
 
 from .log import logger
 from .collector import Collector
@@ -27,12 +26,14 @@ class ScenarioRunner:
 
     _task = None
 
-    def __init__(self, scenario_file: str, results_dir: str = RESULTS_DIR, loop: AbstractEventLoop = None):
+    def __init__(self, scenario_file: str,
+                 results_dir: str = RESULTS_DIR,
+                 loop: asyncio.AbstractEventLoop = None):
         self._loop = loop or asyncio.get_event_loop()
         self._scenario = self._load_scenario(scenario_file)
         self._result_dir = self._create_result_dir(results_dir, scenario_file)
 
-        self.collector = Collector(self._result_dir)
+        self.collector = Collector(self._result_dir, loop=self._loop)
 
     @staticmethod
     def _load_scenario(scenario_file: str):
@@ -65,7 +66,7 @@ class ScenarioRunner:
     @staticmethod
     def _create_result_dir(root_dir: str, scenario_file: str):
         dt = datetime.now()
-        scenario_name = os.path.splitext(os.path.basename(scenario_file))
+        scenario_name = os.path.splitext(os.path.basename(scenario_file))[0]
         result_dir = os.path.abspath(os.path.join(root_dir,
                                      f'{scenario_name}-{dt.strftime("%Y%m%d%H%M%S%f")}'))
         logger.info('Create scenario result dir: %s', result_dir)

@@ -1,5 +1,8 @@
 import os
 import time
+import asyncio
+
+from .log import logger
 
 STATUS_SUCCESS = 'OK'
 STATUS_FAILURE = 'FAILED'
@@ -55,8 +58,13 @@ class Collector:
 
     _results_file = None
 
-    def __init__(self, result_dir: str, file_name: str):
+    def __init__(self, result_dir: str,
+                 file_name: str = RESULTS_FILE,
+                 log_interval: float = 15.0,
+                 loop: asyncio.AbstractEventLoop = None):
         self._file_path = os.path.join(result_dir, file_name)
+        self._log_interval = log_interval
+        self._loop = loop or asyncio.get_event_loop()
 
         self.current_counters = self._create_counters()
         self.previous_counters = self._create_counters()
@@ -81,14 +89,29 @@ class Collector:
         }
 
     def _reset_counters(self):
+        self._reset_timer = self._loop.call_later(1, self._reset_counters)
+
         self.previous_counters = self.current_counters
         self.current_counters = self._create_counters()
-        self.current_counters['active_users'] = self.total_counters['active_users']
+
+        counters = ' '.join([f'{key}={value}' for key, value in self.total_counters.items()])
+        self._results_file.write(f'@{counters}\n')
 
     def _write_result(self, result: Result):
         if not self._results_file:
             return
         self._results_file.write(f'{result}\n')
+
+    def _log_progress(self):
+        self._log_timer = self._loop.call_later(self._log_interval, self._log_progress)
+
+        counters = self.previous_counters
+        total_counters = self.total_counters
+        logger.info(f'After {self.duration} seconds\n'
+                    f'\tUsers: active={total_counters["active_users"]} [{counters["active_users"]} user/s], '
+                    f'done={total_counters["users_done"]} [{counters["users_done"]} user/s]\n'
+                    f'\tRequests: sent={total_counters["requests_sent"]} [{counters["requests_sent"]} req/s]\n'
+                    f'done={total_counters["requests_done"]} [{counters["requests_done"]} req/s]')
 
     @property
     def duration(self):
@@ -102,18 +125,23 @@ class Collector:
     def start(self):
         self._results_file = open(self._file_path, 'w')
         self._start_time = time.time()
+        self._reset_timer = self._loop.call_later(1, self._reset_counters)
+        self._log_timer = self._loop.call_later(self._log_interval, self._log_progress)
 
     def stop(self):
         self._end_time = time.time()
         if self._results_file:
             self._results_file.close()
+        if self._reset_timer:
+            self._reset_timer.cancel()
+        if self._log_timer:
+            self._log_timer.cancel()
 
     def start_user(self):
         self.current_counters['active_users'] += 1
         self.total_counters['active_users'] += 1
 
     def stop_user(self):
-        self.current_counters['active_users'] -= 1
         self.total_counters['active_users'] -= 1
         self.current_counters['users_done'] += 1
         self.total_counters['users_done'] += 1
