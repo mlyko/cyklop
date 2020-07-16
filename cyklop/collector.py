@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import asyncio
 
@@ -66,11 +67,11 @@ class Collector:
         self._log_interval = log_interval
         self._loop = loop or asyncio.get_event_loop()
 
+        self.results = []
+
         self.current_counters = self._create_counters()
         self.previous_counters = self._create_counters()
         self.total_counters = self._create_counters()
-
-        self.results = []
 
     def __enter__(self):
         self.start()
@@ -79,13 +80,18 @@ class Collector:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
 
-    @staticmethod
-    def _create_counters():
+    def _create_counters(self):
         return {
             'active_users': 0,
             'users_done': 0,
             'requests_sent': 0,
-            'requests_done': 0
+            'requests_done': 0,
+            'responses': {
+                STATUS_SUCCESS: 0,
+                STATUS_FAILURE: 0,
+                STATUS_ERROR: 0
+            },
+            'results_idx': len(self.results)
         }
 
     def _reset_counters(self):
@@ -94,24 +100,48 @@ class Collector:
         self.previous_counters = self.current_counters
         self.current_counters = self._create_counters()
 
-        counters = ' '.join([f'{key}={value}' for key, value in self.total_counters.items()])
-        self._results_file.write(f'@{counters}\n')
+        self._results_file.write('@')
+        json.dump(self.total_counters, self._results_file, separators=(",", ":"))
+        self._results_file.write(os.linesep)
 
     def _write_result(self, result: Result):
         if not self._results_file:
             return
-        self._results_file.write(f'{result}\n')
+        self._results_file.write(f'{result}')
+        self._results_file.write(os.linesep)
 
     def _log_progress(self):
         self._log_timer = self._loop.call_later(self._log_interval, self._log_progress)
 
         counters = self.previous_counters
         total_counters = self.total_counters
+
+        total_time = 0.0
+        min_time = 0.0
+        max_time = 0.0
+        start_idx = counters['results_idx']
+        end_idx = self.current_counters['results_idx']
+        for result in self.results[start_idx:end_idx]:
+            response_time = result.end - result.start
+            total_time += response_time
+            if response_time < min_time or not min_time:
+                min_time = response_time
+            elif response_time > max_time:
+                max_time = response_time
+
+        responses = ', '.join([
+            f'{key}={count} [{100 * count / total_counters["requests_done"]:.2f}%]'
+            for key, count in total_counters["responses"].items()
+        ])
+        avg_time = total_time / (end_idx - start_idx)
+
         logger.info(f'After {self.duration} seconds\n'
                     f'\tUsers: active={total_counters["active_users"]} [{counters["active_users"]} user/s], '
                     f'done={total_counters["users_done"]} [{counters["users_done"]} user/s]\n'
-                    f'\tRequests: sent={total_counters["requests_sent"]} [{counters["requests_sent"]} req/s]\n'
-                    f'done={total_counters["requests_done"]} [{counters["requests_done"]} req/s]')
+                    f'\tRequests: sent={total_counters["requests_sent"]} [{counters["requests_sent"]} req/s] '
+                    f'done={total_counters["requests_done"]} [{counters["requests_done"]} res/s]\n'
+                    f'\tResponses: {responses}\n'
+                    f'\tTimes: min={min_time:.3f}s, avg={avg_time:.3f}s, max={max_time:.3f}s')
 
     @property
     def duration(self):
@@ -154,4 +184,6 @@ class Collector:
         self._write_result(result)
         self.results.append(result)
         self.current_counters['requests_done'] += 1
+        self.current_counters['responses'][result.status] += 1
         self.total_counters['requests_done'] += 1
+        self.total_counters['responses'][result.status] += 1
