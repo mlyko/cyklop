@@ -22,8 +22,6 @@ class ScenarioRunner:
     _current_rate = 0
     _start_time: float = None
 
-    _pending_users = 0
-
     _task = None
 
     def __init__(self, scenario_file: str,
@@ -32,6 +30,7 @@ class ScenarioRunner:
         self._loop = loop or asyncio.get_event_loop()
         self._scenario = self._load_scenario(scenario_file)
         self._result_dir = self._create_result_dir(results_dir, scenario_file)
+        self._pending_users = []
 
         self.collector = Collector(self._result_dir, loop=self._loop)
 
@@ -79,6 +78,9 @@ class ScenarioRunner:
             self._current_step.start(current_time, self._current_rate)
 
     def _rate_forward(self):
+        if self._current_step is None:
+            return
+
         timer = self._loop.call_later(1.0, self._rate_forward)
 
         current_time = self._loop.time()
@@ -106,27 +108,32 @@ class ScenarioRunner:
         logger.debug('Spawn next users: %d', n)
         for i in range(n):
             user = self._current_step.user(self.collector, self._loop)
-            self.collector.start_user()
-            future = asyncio.ensure_future(user.execute(), loop=self._loop)
+            future = asyncio.ensure_future(self._run_user(user), loop=self._loop)
             future.add_done_callback(self._user_done)
-            self._pending_users += 1
+            self._pending_users.append(future)
 
         self._spawn_index += 1
+
+    async def _run_user(self, user):
+        self.collector.start_user()
+        try:
+            await user.execute()
+        finally:
+            await user.client.close()
+            self.collector.stop_user()
 
     def _user_done(self, future):
         try:
             future.result()
-        except Exception as err:
-            logger.error('User execution error: %s', err)
         finally:
-            self.collector.stop_user()
+            self._pending_users.remove(future)
 
-        self._pending_users -= 1
-        if self._current_step is None and self._pending_users == 0:
+        if self._current_step is None and not self._pending_users:
             self._task.set_result(True)
 
     async def run(self):
-        self._task = asyncio.ensure_future(asyncio.Future(loop=self._loop), loop=self._loop)
+        self._task = asyncio.ensure_future(asyncio.Future(loop=self._loop),
+                                           loop=self._loop)
 
         self._scenario.simulate()
         self._scenario_steps = iter(self._scenario)
@@ -140,5 +147,15 @@ class ScenarioRunner:
         with self.collector:
             try:
                 await self._task
-            finally:
-                logger.info('Stop running scenario: %s', self._scenario)
+            except asyncio.CancelledError:
+                logger.warning('Terminate running scenario: %s', self._scenario)
+                self._current_step = None
+                if self._pending_users:
+                    # Try to terminate gently
+                    self._task = asyncio.ensure_future(asyncio.Future(loop=self._loop),
+                                                       loop=self._loop)
+                    for future in self._pending_users:
+                        future.cancel()
+                    await self._task
+            else:
+                logger.info('Finish running scenario: %s', self._scenario)

@@ -53,6 +53,7 @@ class Result:
 class Collector:
     _start_time = None
     _end_time = None
+    _collecting = False
 
     _reset_timer = None
     _log_timer = None
@@ -74,11 +75,11 @@ class Collector:
         self.total_counters = self._create_counters()
 
     def __enter__(self):
-        self.start()
+        self.open()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop()
+        self.close()
 
     def _create_counters(self):
         return {
@@ -152,35 +153,50 @@ class Collector:
 
         return int(time.time() - self._start_time)
 
-    def start(self):
+    def open(self):
         self._results_file = open(self._file_path, 'w')
+        self._collecting = True
         self._start_time = time.time()
         self._reset_timer = self._loop.call_later(1, self._reset_counters)
         self._log_timer = self._loop.call_later(self._log_interval, self._log_progress)
 
-    def stop(self):
+    def close(self):
         self._end_time = time.time()
-        if self._results_file:
-            self._results_file.close()
+        self._collecting = False
         if self._reset_timer:
             self._reset_timer.cancel()
         if self._log_timer:
             self._log_timer.cancel()
+        if self._results_file:
+            self._results_file.close()
+            self._results_file = None
 
     def start_user(self):
+        if not self._collecting:
+            return
+
         self.current_counters['active_users'] += 1
         self.total_counters['active_users'] += 1
 
     def stop_user(self):
+        if not self._collecting:
+            return
+
         self.total_counters['active_users'] -= 1
         self.current_counters['users_done'] += 1
         self.total_counters['users_done'] += 1
 
     def start_request(self):
+        if not self._collecting:
+            return
+
         self.current_counters['requests_sent'] += 1
         self.total_counters['requests_sent'] += 1
 
     def stop_request(self, result: Result):
+        if not self._collecting:
+            return
+
         self._write_result(result)
         self.results.append(result)
         self.current_counters['requests_done'] += 1

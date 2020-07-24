@@ -127,3 +127,7 @@ class HttpClient:
         finally:
             result.end = self._loop.time()
             self._collector.stop_request(result)
+
+    async def close(self):
+        if self._client:
+            await self._client.aclose()
