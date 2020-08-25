@@ -1,5 +1,14 @@
 import logging
 
 logger = logging.getLogger('cyklop')
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s: %(message)s')
+
+
+def setup(debug=False, quiet=False):
+    level = logging.INFO
+    if debug:
+        level = logging.DEBUG
+    elif quiet:
+        level = logging.WARNING
+
+    logging.basicConfig(level=level,
+                        format='%(asctime)s - %(levelname)s: %(message)s')

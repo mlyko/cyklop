@@ -122,6 +122,9 @@ class Collector:
         max_time = 0.0
         start_idx = counters['results_idx']
         end_idx = self.current_counters['results_idx']
+        if start_idx == end_idx:
+            return
+
         for result in self.results[start_idx:end_idx]:
             response_time = result.end - result.start
             total_time += response_time
